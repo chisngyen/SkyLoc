@@ -90,15 +90,30 @@ seed_everything(CFG.SEED)
 # 1. DATA
 # ============================================================================
 
+def _parse_coord(s):
+    """Parse a coordinate string like 'N36.123' or 'E120.456' or plain '36.123'."""
+    s = s.strip()
+    sign = 1.0
+    if s[0] in ('S', 's', 'W', 'w'):
+        sign = -1.0
+        s = s[1:]
+    elif s[0] in ('N', 'n', 'E', 'e'):
+        s = s[1:]
+    return sign * float(s)
+
+
 def parse_gps_file(path):
-    """Parse DenseUAV GPS file → dict[folder_id] = (lat, lon)."""
+    """Parse DenseUAV GPS file → dict[folder_id] = (lat, lon).
+    Handles formats: '0 N36.xxx E120.xxx' or '0 36.xxx 120.xxx'
+    """
     gps = {}
     with open(path, "r") as f:
         for line in f:
             parts = line.strip().split()
             if len(parts) >= 3:
                 folder_id = parts[0].zfill(6)
-                lat, lon = float(parts[1]), float(parts[2])
+                lat = _parse_coord(parts[1])
+                lon = _parse_coord(parts[2])
                 gps[folder_id] = (lat, lon)
     return gps
 
