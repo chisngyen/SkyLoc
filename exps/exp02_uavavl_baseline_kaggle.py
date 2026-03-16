@@ -14,7 +14,7 @@ import subprocess, sys
 def install(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", package])
 
-for pkg in ["timm", "rasterio", "scipy"]:
+for pkg in ["timm", "rasterio", "scipy", "pyproj"]:
     try:
         __import__(pkg.replace("-", "_").split("==")[0])
     except ImportError:
@@ -80,8 +80,8 @@ class CFG:
     SEED         = 42
 
     # GPS matching thresholds (meters)
-    POS_RADIUS   = 10.0   # positive: tile center within Xm of UAV GPS
-    NEG_RADIUS   = 50.0   # hard negative: tile center between pos and neg radius
+    POS_RADIUS   = 25.0   # positive: tile center within Xm of UAV GPS
+    NEG_RADIUS   = 100.0  # hard negative: tile center between pos and neg radius
 
     # Eval thresholds
     EVAL_THRESHOLDS_M = [5, 10, 25]
@@ -142,13 +142,12 @@ def get_tif_geotransform(path):
 
 
 def tile_reference_map(tif_path, tile_size, stride):
-    """Slice a reference map .tif into tiles with GPS coordinates.
+    """Slice a reference map .tif into tiles with GPS coordinates (WGS84).
     Returns list of (tile_image_pil, center_lat, center_lon, tile_id).
     """
-    transform, width, height = get_tif_geotransform(tif_path)
+    transform_affine, width, height = get_tif_geotransform(tif_path)
 
-    if transform is None:
-        # Fallback: load entire image and tile without GPS
+    if transform_affine is None:
         img = load_tif_as_pil(tif_path)
         width, height = img.size
         tiles = []
@@ -160,7 +159,21 @@ def tile_reference_map(tif_path, tile_size, stride):
                 tid += 1
         return tiles
 
-    # With rasterio: extract tiles with GPS
+    # Set up CRS reprojection to WGS84 (lat/lon)
+    try:
+        from pyproj import Transformer
+        with rasterio.open(tif_path) as src:
+            src_crs = src.crs
+        if src_crs and not src_crs.is_geographic:
+            transformer = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
+            print(f"    [CRS] {src_crs} → WGS84 reprojection enabled")
+        else:
+            transformer = None
+            print(f"    [CRS] Already geographic (lat/lon)")
+    except Exception as e:
+        print(f"    [CRS] pyproj error: {e}, assuming lat/lon")
+        transformer = None
+
     tiles = []
     tid = 0
     with rasterio.open(tif_path) as src:
@@ -180,12 +193,25 @@ def tile_reference_map(tif_path, tile_size, stride):
 
                 tile_img = Image.fromarray(data)
 
-                # Center pixel → GPS
+                # Center pixel → native CRS coords
                 cx, cy = x + tile_size // 2, y + tile_size // 2
-                lon, lat = src.transform * (cx, cy)
+                native_x, native_y = src.transform * (cx, cy)
+
+                # Reproject to WGS84 if needed
+                if transformer is not None:
+                    lon, lat = transformer.transform(native_x, native_y)
+                else:
+                    lon, lat = native_x, native_y
 
                 tiles.append((tile_img, lat, lon, f"tile_{tid:06d}"))
                 tid += 1
+
+    # Debug: print coordinate ranges
+    if tiles:
+        lats = [t[1] for t in tiles]
+        lons = [t[2] for t in tiles]
+        print(f"    Tile GPS range: lat=[{min(lats):.6f}, {max(lats):.6f}] "
+              f"lon=[{min(lons):.6f}, {max(lons):.6f}]")
 
     return tiles
 
@@ -561,6 +587,11 @@ def main():
     print("\n[2/4] Discovering UAV images...")
     uav_samples = discover_uav_data(uav_dir)
     print(f"  ✓ {len(uav_samples)} UAV images with GPS")
+    if uav_samples:
+        ulats = [s[1] for s in uav_samples]
+        ulons = [s[2] for s in uav_samples]
+        print(f"  UAV GPS range: lat=[{min(ulats):.6f}, {max(ulats):.6f}] "
+              f"lon=[{min(ulons):.6f}, {max(ulons):.6f}]")
 
     # --- Split train/val (80/20 by image index) ---
     n_total = len(uav_samples)
