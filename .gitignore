@@ -1,0 +1,49 @@
+# Agents / Skills
+.agents/
+_agents/
+.agent/
+_agent/
+
+# Ideas (private)
+ideas/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Model weights
+*.pth
+*.pt
+*.ckpt
+*.bin
+
+# Large data
+*.tif
+*.tiff
+
+# Env
+.env
+.venv/
+venv/
+
+# Gemini brain
+.gemini/
