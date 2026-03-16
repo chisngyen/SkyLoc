@@ -52,7 +52,7 @@ class CFG:
     # Model
     BACKBONE     = "dinov2_vitb14"
     EMBED_DIM    = 512
-    IMG_SIZE     = 384
+    IMG_SIZE     = 392       # must be divisible by 14 (DINOv2 patch_size)
 
     # Training
     EPOCHS       = 40
