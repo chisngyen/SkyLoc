@@ -43,6 +43,7 @@ from tqdm import tqdm
 try:
     import rasterio
     from rasterio.windows import Window
+    from rasterio.warp import transform as rio_transform
     HAS_RASTERIO = True
 except ImportError:
     HAS_RASTERIO = False
@@ -134,20 +135,20 @@ def load_tif_as_pil(path):
 
 
 def get_tif_geotransform(path):
-    """Get geotransform from a GeoTIFF → pixel-to-GPS mapping."""
+    """Get geotransform and CRS from a GeoTIFF → pixel-to-GPS mapping."""
     if HAS_RASTERIO:
         with rasterio.open(path) as src:
-            return src.transform, src.width, src.height
-    return None, None, None
+            return src.transform, src.width, src.height, src.crs
+    return None, None, None, None
 
 
 def tile_reference_map(tif_path, tile_size, stride):
     """Slice a reference map .tif into tiles with GPS coordinates (WGS84).
     Returns list of (tile_image_pil, center_lat, center_lon, tile_id).
     """
-    transform_affine, width, height = get_tif_geotransform(tif_path)
+    transform_affine, width, height, crs = get_tif_geotransform(tif_path)
 
-    if transform_affine is None:
+    if transform_affine is None or crs is None:
         img = load_tif_as_pil(tif_path)
         width, height = img.size
         tiles = []
@@ -272,6 +273,119 @@ def discover_uav_data(uav_root):
     return all_samples
 
 
+def _coerce_float(x):
+    try:
+        return float(x)
+    except Exception:
+        return None
+
+
+def _extract_lat_lon_from_meta(entry):
+    """
+    Heuristic extractor for (lat, lon) from a metadata dict.
+    Supports common conventions: lat/lon, latitude/longitude, B/L, BLH, etc.
+    Returns (lat, lon) or (None, None).
+    """
+    if not isinstance(entry, dict):
+        return None, None
+
+    lower_map = {str(k).lower(): k for k in entry.keys()}
+
+    # Direct key pairs
+    for lat_key in ["lat", "latitude", "b"]:
+        if lat_key not in lower_map:
+            continue
+        for lon_key in ["lon", "lng", "longitude", "l"]:
+            if lon_key not in lower_map:
+                continue
+            lat = _coerce_float(entry[lower_map[lat_key]])
+            lon = _coerce_float(entry[lower_map[lon_key]])
+            if lat is not None and lon is not None:
+                return lat, lon
+
+    # Array-like
+    for blh_key in ["blh", "gps", "coord", "coordinate"]:
+        if blh_key not in lower_map:
+            continue
+        v = entry[lower_map[blh_key]]
+        if isinstance(v, (list, tuple)) and len(v) >= 2:
+            lat = _coerce_float(v[0])
+            lon = _coerce_float(v[1])
+            if lat is not None and lon is not None:
+                return lat, lon
+
+    return None, None
+
+
+def load_uav_from_metadata(meta_json_path, dataset_root):
+    """
+    Load UAV samples from metadata JSON (Kaggle provides `metadata/QZ_Town.json`).
+    Returns list of (img_path, lat, lon).
+    """
+    if not os.path.exists(meta_json_path):
+        return []
+
+    with open(meta_json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # Kaggle metadata can be either:
+    # - a list[dict]
+    # - or a dict with a top-level "root": list[dict]
+    if isinstance(data, dict) and isinstance(data.get("root"), list):
+        data = data["root"]
+    if not isinstance(data, list):
+        return []
+
+    samples = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+
+        img_rel = entry.get("name") or entry.get("img") or entry.get("image") or entry.get("path")
+        if not img_rel:
+            continue
+
+        img_rel = str(img_rel).replace("\\", "/").lstrip("./")
+
+        # metadata may store paths starting with "Data/..."
+        if img_rel.lower().startswith("data/"):
+            img_path = os.path.join(dataset_root, img_rel[5:])
+        else:
+            img_path = os.path.join(dataset_root, img_rel)
+
+        img_path = os.path.normpath(img_path)
+        if not os.path.exists(img_path):
+            # Fallback: sometimes only place/filename is stored
+            alt = os.path.normpath(os.path.join(dataset_root, "UAV_image", img_rel))
+            if os.path.exists(alt):
+                img_path = alt
+            else:
+                continue
+
+        lat, lon = _extract_lat_lon_from_meta(entry)
+        if lat is None or lon is None:
+            continue
+
+        samples.append((img_path, lat, lon))
+
+    return samples
+
+
+def is_rgb_reference_tif(tif_path):
+    """Filter out non-RGB GeoTIFFs (e.g., DSM single-band) from tiling."""
+    name = os.path.basename(tif_path).lower()
+    if "dsm" in name:
+        return False
+    if HAS_RASTERIO:
+        try:
+            with rasterio.open(tif_path) as src:
+                return int(src.count) >= 3
+        except Exception:
+            return False
+    # Best-effort fallback without rasterio
+    return ("result" in name) or ("satellite" in name)
+
+
 class UAVAVLTileDataset(Dataset):
     """Dataset for reference-map tiles (gallery)."""
 
@@ -321,6 +435,8 @@ class UAVAVLTrainDataset(Dataset):
         # Pre-compute positive tile indices for each UAV image
         self.pairs = []
         for uav_idx, (_, ulat, ulon) in enumerate(uav_samples):
+            if len(self.tile_gps) == 0:
+                break
             dists = np.array([
                 haversine(ulat, ulon, tlat, tlon)
                 for tlat, tlon in self.tile_gps
@@ -329,8 +445,27 @@ class UAVAVLTrainDataset(Dataset):
             if len(pos_indices) > 0:
                 self.pairs.append((uav_idx, pos_indices))
 
-        print(f"[Train] {len(self.pairs)} UAV images with ≥1 positive tile "
-              f"(radius={pos_radius}m)")
+        if len(self.pairs) == 0:
+            print(f"[Train][WARN] No UAV images with ≥1 positive tile "
+                  f"(radius={pos_radius}m). Falling back to nearest-tile pairing.")
+            for uav_idx, (_, ulat, ulon) in enumerate(uav_samples):
+                if len(self.tile_gps) == 0:
+                    continue
+                dists = np.array([
+                    haversine(ulat, ulon, tlat, tlon)
+                    for tlat, tlon in self.tile_gps
+                ])
+                nearest_idx = int(np.argmin(dists))
+                self.pairs.append((uav_idx, np.array([nearest_idx], dtype=int)))
+
+        if len(self.pairs) == 0:
+            raise RuntimeError(
+                "[Train][ERROR] Could not form any UAV–tile pairs. "
+                "Check GPS / CRS alignment between UAV and reference map."
+            )
+
+        print(f"[Train] {len(self.pairs)} UAV images with ≥1 training tile "
+              f"(radius={pos_radius}m or nearest-tile fallback)")
 
     def __len__(self):
         return len(self.pairs)
@@ -571,11 +706,12 @@ def main():
 
     # --- Build reference tile gallery ---
     print("\n[1/4] Tiling reference maps...")
-    tif_files = sorted([
+    tif_files_all = sorted([
         os.path.join(ref_dir, f) for f in os.listdir(ref_dir)
         if f.lower().endswith('.tif')
     ])
-    print(f"  Found {len(tif_files)} .tif reference maps")
+    tif_files = [p for p in tif_files_all if is_rgb_reference_tif(p)]
+    print(f"  Found {len(tif_files_all)} .tif files, using {len(tif_files)} RGB reference maps (skip DSM/1-band)")
 
     all_tiles = []
     for tif_path in tqdm(tif_files, desc="Tiling"):
@@ -585,7 +721,12 @@ def main():
 
     # --- Discover UAV images ---
     print("\n[2/4] Discovering UAV images...")
-    uav_samples = discover_uav_data(uav_dir)
+    meta_path = os.path.join(root, CFG.META_FILE)
+    uav_samples = load_uav_from_metadata(meta_path, root)
+    if len(uav_samples) == 0:
+        print(f"  [WARN] No UAV GPS loaded from metadata: {meta_path}")
+        print("  [WARN] Falling back to smart_pos.txt discovery (if present).")
+        uav_samples = discover_uav_data(uav_dir)
     print(f"  ✓ {len(uav_samples)} UAV images with GPS")
     if uav_samples:
         ulats = [s[1] for s in uav_samples]
@@ -713,9 +854,15 @@ def main():
     print("\n" + "=" * 60)
     print("  FINAL EVALUATION (best model)")
     print("=" * 60)
-    model.load_state_dict(
-        torch.load(os.path.join(CFG.OUTPUT_DIR, "best_uavavl_baseline.pth"))
-    )
+
+    best_ckpt_path = os.path.join(CFG.OUTPUT_DIR, "best_uavavl_baseline.pth")
+    if os.path.exists(best_ckpt_path):
+        model.load_state_dict(torch.load(best_ckpt_path))
+        print(f"[Final] Loaded best checkpoint from {best_ckpt_path}")
+    else:
+        # In case no epoch improved PDM@1_10m, fall back to last-epoch weights.
+        print(f"[Final][WARN] Best checkpoint not found at {best_ckpt_path}. "
+              f"Using last-epoch model for final evaluation.")
     final_metrics = evaluate_avl(model, val_q_loader, val_g_loader, CFG.DEVICE)
     for k, v in sorted(final_metrics.items()):
         print(f"  {k}: {v:.4f}")
