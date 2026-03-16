@@ -14,7 +14,7 @@ import subprocess, sys
 def install(package):
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", package])
 
-for pkg in ["timm", "faiss-gpu", "rasterio", "scipy"]:
+for pkg in ["timm", "rasterio", "scipy"]:
     try:
         __import__(pkg.replace("-", "_").split("==")[0])
     except ImportError:
