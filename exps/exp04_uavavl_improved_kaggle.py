@@ -1,5 +1,5 @@
 # ============================================================================
-# EXP04 — UAV-AVL Improved: DINOv2 + GeM + Denser Tiling + More Epochs
+# EXP04 — UAV-AVL Improved: DINOv2 + GeM + Denser Tiling + Benchmark Metrics
 # ============================================================================
 # Improvements over EXP02:
 #   1. GeM pooling on patch tokens
@@ -8,8 +8,11 @@
 #   4. IMG_SIZE=518 (DINOv2 native)
 #   5. Unfreeze 6 blocks (was 4)
 #   6. Better augmentation
+#   7. [FIX] PDE metric (official UAV-AVL benchmark standard)
+#   8. [FIX] Black tile filtering (skip tiles with >40% black)
+#   9. [FIX] Support official JSON metadata (camera intrinsics)
 # Dataset: hunhtrungkit/uav-avl
-# Metrics: R@1/5/10, PDM@K @5/10/25m, Mean/Median error, Inference timing
+# Metrics: PDE@K (benchmark), R@K, PDM@K, Mean/Median error, Timing
 # ============================================================================
 
 import subprocess, sys
@@ -23,7 +26,7 @@ for pkg in ["timm", "rasterio", "scipy", "pyproj"]:
     except ImportError:
         install(pkg)
 
-import os, json, math, time, random, warnings
+import os, json, math, time, random, warnings, glob
 from pathlib import Path
 from collections import defaultdict
 
@@ -126,8 +129,22 @@ def get_tif_geotransform(path):
     return None, None, None
 
 
+def is_tile_mostly_black(data, threshold=0.4):
+    """Check if a tile has more than `threshold` fraction of black pixels.
+    Follows UAV-AVL benchmark: skip tiles with >40% black areas."""
+    if data.ndim == 3:
+        gray = data.mean(axis=2)
+    else:
+        gray = data
+    black_frac = np.sum(gray < 5) / gray.size
+    return black_frac > threshold
+
+
 def tile_reference_map(tif_path, tile_size, stride):
-    """Tile reference map with CRS→WGS84 reprojection."""
+    """Tile reference map with CRS→WGS84 reprojection + black tile filtering.
+    Returns: list of (PIL_img, lat, lon, tile_id, pixel_cx, pixel_cy)
+    pixel_cx/cy are center coords in the original image (for PDE metric).
+    """
     transform_affine, width, height = get_tif_geotransform(tif_path)
 
     if transform_affine is None:
@@ -138,7 +155,11 @@ def tile_reference_map(tif_path, tile_size, stride):
         for y in range(0, height - tile_size + 1, stride):
             for x in range(0, width - tile_size + 1, stride):
                 tile = img.crop((x, y, x + tile_size, y + tile_size))
-                tiles.append((tile, 0.0, 0.0, f"tile_{tid:06d}"))
+                tile_np = np.array(tile)
+                if is_tile_mostly_black(tile_np):
+                    continue
+                cx_px, cy_px = x + tile_size // 2, y + tile_size // 2
+                tiles.append((tile, 0.0, 0.0, f"tile_{tid:06d}", cx_px, cy_px))
                 tid += 1
         return tiles
 
@@ -156,6 +177,7 @@ def tile_reference_map(tif_path, tile_size, stride):
         transformer = None
 
     tiles = []
+    n_skipped = 0
     tid = 0
     with rasterio.open(tif_path) as src:
         for y in range(0, height - tile_size + 1, stride):
@@ -172,18 +194,25 @@ def tile_reference_map(tif_path, tile_size, stride):
                     else:
                         data = np.zeros_like(data, dtype=np.uint8)
 
+                # Filter black tiles (benchmark standard)
+                if is_tile_mostly_black(data):
+                    n_skipped += 1
+                    continue
+
                 tile_img = Image.fromarray(data)
-                cx, cy = x + tile_size // 2, y + tile_size // 2
-                native_x, native_y = src.transform * (cx, cy)
+                cx_px, cy_px = x + tile_size // 2, y + tile_size // 2
+                native_x, native_y = src.transform * (cx_px, cy_px)
 
                 if transformer is not None:
                     lon, lat = transformer.transform(native_x, native_y)
                 else:
                     lon, lat = native_x, native_y
 
-                tiles.append((tile_img, lat, lon, f"tile_{tid:06d}"))
+                tiles.append((tile_img, lat, lon, f"tile_{tid:06d}", cx_px, cy_px))
                 tid += 1
 
+    if n_skipped > 0:
+        print(f"    [Filter] Skipped {n_skipped} black tiles")
     if tiles:
         lats = [t[1] for t in tiles]
         lons = [t[2] for t in tiles]
@@ -193,8 +222,34 @@ def tile_reference_map(tif_path, tile_size, stride):
 
 
 # ============================================================================
-# 2. DATA
+# 2. DATA (supports both JSON metadata and GPS txt)
 # ============================================================================
+
+def load_metadata_json(data_root):
+    """Load official UAV-AVL metadata JSON files.
+    Returns: list of (img_path, lat, lon, metadata_dict)
+    """
+    meta_dir = os.path.join(data_root, "metadata")
+    if not os.path.exists(meta_dir):
+        return None
+    samples = []
+    for jf in sorted(glob.glob(os.path.join(meta_dir, "*.json"))):
+        try:
+            with open(jf, "r") as f:
+                entries = json.load(f)
+            for entry in entries:
+                name = entry.get("name", "")
+                lat = entry.get("lat", None)
+                lon = entry.get("lon", None)
+                if lat is not None and lon is not None and name:
+                    img_path = os.path.join(data_root, name)
+                    if os.path.exists(img_path):
+                        samples.append((img_path, float(lat), float(lon), entry))
+            print(f"  ✓ JSON metadata: {len(entries)} entries from {os.path.basename(jf)}")
+        except Exception as e:
+            print(f"  [WARN] Failed to load {jf}: {e}")
+    return samples if samples else None
+
 
 def parse_smart_pos(filepath):
     positions = []
@@ -206,7 +261,16 @@ def parse_smart_pos(filepath):
     return positions
 
 
-def discover_uav_data(uav_root):
+def discover_uav_data(uav_root, data_root=None):
+    """Discover UAV images. Try JSON metadata first, fallback to GPS txt."""
+    # Try official JSON metadata first
+    if data_root:
+        json_samples = load_metadata_json(data_root)
+        if json_samples:
+            # Convert to (img_path, lat, lon) format
+            return [(s[0], s[1], s[2]) for s in json_samples]
+
+    # Fallback: GPS txt files
     all_samples = []
     for flight in sorted(os.listdir(uav_root)):
         flight_dir = os.path.join(uav_root, flight)
@@ -239,8 +303,12 @@ class UAVAVLTileDataset(Dataset):
         return len(self.tiles)
 
     def __getitem__(self, idx):
-        img, lat, lon, tid = self.tiles[idx]
-        return self.transform(img), tid, torch.tensor(lat, dtype=torch.float32), torch.tensor(lon, dtype=torch.float32)
+        img, lat, lon, tid, px_cx, px_cy = self.tiles[idx]
+        return (self.transform(img), tid,
+                torch.tensor(lat, dtype=torch.float32),
+                torch.tensor(lon, dtype=torch.float32),
+                torch.tensor(px_cx, dtype=torch.float32),
+                torch.tensor(px_cy, dtype=torch.float32))
 
 
 class UAVAVLQueryDataset(Dataset):
@@ -290,7 +358,7 @@ class UAVAVLTrainDataset(Dataset):
         tile_idx = random.choice(pos_tile_indices)
         img_path, _, _ = self.uav_samples[uav_idx]
         uav_img = self.transform_uav(Image.open(img_path).convert("RGB"))
-        tile_img, _, _, _ = self.tiles[tile_idx]
+        tile_img, _, _, _, _, _ = self.tiles[tile_idx]
         tile_img = self.transform_tile(tile_img)
         return uav_img, tile_img, idx
 
@@ -373,6 +441,7 @@ class SymmetricInfoNCE(nn.Module):
 def extract_features_tiles(model, dataloader, device):
     model.eval()
     all_feats, all_lats, all_lons, all_tids = [], [], [], []
+    all_px_cx, all_px_cy = [], []
     if device == "cuda":
         dummy = torch.randn(1, 3, CFG.IMG_SIZE, CFG.IMG_SIZE, device=device)
         with torch.no_grad():
@@ -380,15 +449,18 @@ def extract_features_tiles(model, dataloader, device):
         torch.cuda.synchronize()
     t_start = time.time()
     with torch.no_grad():
-        for imgs, tids, lats, lons in tqdm(dataloader, desc="Gallery feats", leave=False):
+        for imgs, tids, lats, lons, px_cx, px_cy in tqdm(dataloader, desc="Gallery feats", leave=False):
             feats = model(imgs.to(device))
             all_feats.append(feats.cpu().numpy())
             all_tids.extend(tids)
             all_lats.extend(lats.numpy())
             all_lons.extend(lons.numpy())
+            all_px_cx.extend(px_cx.numpy())
+            all_px_cy.extend(px_cy.numpy())
     if device == "cuda":
         torch.cuda.synchronize()
-    return np.concatenate(all_feats), np.array(all_lats), np.array(all_lons), all_tids, time.time() - t_start
+    return (np.concatenate(all_feats), np.array(all_lats), np.array(all_lons),
+            all_tids, np.array(all_px_cx), np.array(all_px_cy), time.time() - t_start)
 
 
 def extract_features_queries(model, dataloader, device):
@@ -406,10 +478,33 @@ def extract_features_queries(model, dataloader, device):
     return np.concatenate(all_feats), np.array(all_lats), np.array(all_lons), time.time() - t_start
 
 
+def compute_pde(q_lat, q_lon, tile_px_cx, tile_px_cy, ref_transform, tile_size,
+                transformer_to_utm=None, transformer_to_wgs=None):
+    """Compute PDE (Position Deviation Error) — official UAV-AVL benchmark metric.
+    PDE = pixel_distance(query_groundtruth, tile_center) / tile_size
+    PDE < 1.0 means the tile covers the query location."""
+    # Convert query GPS to pixel coordinates on the reference map
+    if transformer_to_utm is not None:
+        # Query lat/lon → UTM → pixel
+        q_utm_x, q_utm_y = transformer_to_utm.transform(q_lat, q_lon)
+        inv_transform = ~ref_transform
+        q_px_x, q_px_y = inv_transform * (q_utm_x, q_utm_y)
+    else:
+        # Assume ref_transform maps pixel → geographic directly
+        inv_transform = ~ref_transform
+        q_px_x, q_px_y = inv_transform * (q_lon, q_lat)
+
+    dx = q_px_x - tile_px_cx
+    dy = q_px_y - tile_px_cy
+    pixel_dist = math.sqrt(dx**2 + dy**2)
+    return pixel_dist / tile_size
+
+
 def evaluate_avl(model, query_loader, gallery_loader, device,
-                 thresholds_m=CFG.EVAL_THRESHOLDS_M):
+                 thresholds_m=CFG.EVAL_THRESHOLDS_M,
+                 ref_transforms=None, crs_info=None):
     q_feats, q_lats, q_lons, q_time = extract_features_queries(model, query_loader, device)
-    g_feats, g_lats, g_lons, _, g_time = extract_features_tiles(model, gallery_loader, device)
+    g_feats, g_lats, g_lons, _, g_px_cx, g_px_cy, g_time = extract_features_tiles(model, gallery_loader, device)
 
     n_q, n_g = len(q_lats), len(g_lats)
     t_ret = time.time()
@@ -417,7 +512,7 @@ def evaluate_avl(model, query_loader, gallery_loader, device,
     top1_indices = np.argmax(sim, axis=1)
     t_ret = time.time() - t_ret
 
-    # Localization errors
+    # Localization errors (haversine)
     errors = np.array([haversine(q_lats[i], q_lons[i], g_lats[top1_indices[i]], g_lons[top1_indices[i]])
                        for i in range(n_q)])
 
@@ -434,7 +529,7 @@ def evaluate_avl(model, query_loader, gallery_loader, device,
                     break
         metrics[f"R@{k}"] = correct / n_q
 
-    # PDM@K
+    # PDM@K (GPS meter-based)
     for k in [1, 5, 10]:
         top_k = np.argsort(-sim, axis=1)[:, :k] if k > 1 else top1_indices.reshape(-1, 1)
         for thresh in thresholds_m:
@@ -442,6 +537,43 @@ def evaluate_avl(model, query_loader, gallery_loader, device,
                          if min(haversine(q_lats[i], q_lons[i], g_lats[top_k[i, j]], g_lons[top_k[i, j]])
                                 for j in range(k)) <= thresh)
             metrics[f"PDM@{k}_@{thresh}m"] = correct / n_q
+
+    # PDE@K — official UAV-AVL benchmark metric
+    if ref_transforms and crs_info:
+        try:
+            from pyproj import Transformer
+            t2utm = Transformer.from_crs("EPSG:4326", crs_info, always_xy=False)
+            ref_tf = ref_transforms  # rasterio affine transform
+
+            for k in [1, 5, 10]:
+                top_k = np.argsort(-sim, axis=1)[:, :k]
+                pde_ok = 0
+                for i in range(n_q):
+                    min_pde = float('inf')
+                    for j in range(k):
+                        gi = top_k[i, j]
+                        pde = compute_pde(q_lats[i], q_lons[i],
+                                          g_px_cx[gi], g_px_cy[gi],
+                                          ref_tf, CFG.TILE_SIZE,
+                                          transformer_to_utm=t2utm)
+                        min_pde = min(min_pde, pde)
+                    if min_pde < 1.0:
+                        pde_ok += 1
+                metrics[f"PDE@{k}"] = pde_ok / n_q
+
+            # Also compute mean PDE@1
+            pde_values = []
+            for i in range(n_q):
+                gi = top1_indices[i]
+                pde = compute_pde(q_lats[i], q_lons[i],
+                                  g_px_cx[gi], g_px_cy[gi],
+                                  ref_tf, CFG.TILE_SIZE,
+                                  transformer_to_utm=t2utm)
+                pde_values.append(pde)
+            metrics["mean_PDE@1"] = float(np.mean(pde_values))
+            metrics["median_PDE@1"] = float(np.median(pde_values))
+        except Exception as e:
+            print(f"  [WARN] PDE calculation failed: {e}")
 
     # Timing
     metrics.update({
@@ -497,13 +629,25 @@ def main():
     tif_files = sorted([os.path.join(ref_dir, f) for f in os.listdir(ref_dir) if f.lower().endswith('.tif')])
     print(f"  Found {len(tif_files)} .tif files")
     all_tiles = []
+    ref_affine_transform = None
+    ref_crs_str = None
     for tif_path in tqdm(tif_files, desc="Tiling"):
         all_tiles.extend(tile_reference_map(tif_path, CFG.TILE_SIZE, CFG.TILE_STRIDE))
-    print(f"  ✓ {len(all_tiles)} tiles (stride={CFG.TILE_STRIDE})")
+        # Save CRS info from first TIF for PDE computation
+        if ref_affine_transform is None and HAS_RASTERIO:
+            try:
+                with rasterio.open(tif_path) as src:
+                    if src.crs and not src.crs.is_geographic:
+                        ref_affine_transform = src.transform
+                        ref_crs_str = str(src.crs)
+                        print(f"  [PDE] Using CRS={ref_crs_str} from {os.path.basename(tif_path)}")
+            except Exception:
+                pass
+    print(f"  ✓ {len(all_tiles)} tiles (stride={CFG.TILE_STRIDE}, after black filter)")
 
-    # Discover UAV images
+    # Discover UAV images (try JSON metadata first, fallback to GPS txt)
     print("\n[2/4] Discovering UAV images...")
-    uav_samples = discover_uav_data(uav_dir)
+    uav_samples = discover_uav_data(uav_dir, data_root=root)
     print(f"  ✓ {len(uav_samples)} UAV images with GPS")
     if uav_samples:
         ulats, ulons = [s[1] for s in uav_samples], [s[2] for s in uav_samples]
@@ -576,15 +720,17 @@ def main():
         log = {"epoch": epoch + 1, "loss": round(loss, 5), "time_s": round(elapsed, 1)}
 
         if (epoch + 1) % CFG.EVAL_EVERY == 0 or epoch == CFG.EPOCHS - 1:
-            metrics = evaluate_avl(model, val_q_loader, val_g_loader, CFG.DEVICE)
+            metrics = evaluate_avl(model, val_q_loader, val_g_loader, CFG.DEVICE,
+                                   ref_transforms=ref_affine_transform, crs_info=ref_crs_str)
             log.update(metrics)
             pdm = metrics.get("PDM@1_@10m", 0)
             if pdm > best_pdm:
                 best_pdm = pdm
                 torch.save(model.state_dict(), os.path.join(CFG.OUTPUT_DIR, "best_exp04.pth"))
                 log["best"] = True
+            pde1 = metrics.get('PDE@1', -1)
             print(f"Epoch {epoch+1:3d} | loss={loss:.4f} | "
-                  f"R@1={metrics.get('R@1',0):.3f} | "
+                  f"R@1={metrics.get('R@1',0):.3f} PDE@1={pde1:.3f} | "
                   f"PDM@1_10m={pdm:.3f} PDM@10_25m={metrics.get('PDM@10_@25m',0):.3f} | "
                   f"err={metrics['mean_error_m']:.1f}m | {elapsed:.0f}s")
         else:
@@ -594,7 +740,8 @@ def main():
     # Final
     print("\n" + "=" * 60 + "\n  FINAL EVALUATION\n" + "=" * 60)
     model.load_state_dict(torch.load(os.path.join(CFG.OUTPUT_DIR, "best_exp04.pth")))
-    final = evaluate_avl(model, val_q_loader, val_g_loader, CFG.DEVICE)
+    final = evaluate_avl(model, val_q_loader, val_g_loader, CFG.DEVICE,
+                          ref_transforms=ref_affine_transform, crs_info=ref_crs_str)
     for k, v in sorted(final.items()):
         print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
 
