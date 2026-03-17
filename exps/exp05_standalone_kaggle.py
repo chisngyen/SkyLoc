@@ -8,7 +8,7 @@ Copy this single file to a Kaggle notebook cell and run — no other files neede
 Pipeline
 --------
   Step 1 : SPDGeo retrieval   (DINOv2-S + part discovery + fusion gate)
-  Step 2 : RoMa dense matching (loaded directly from HuggingFace via `romatch`)
+  Step 2 : Local feature matching (OpenCV SIFT) on Top‑N tiles
   Step 3 : PnP + DSM → GPS
 
 Kaggle datasets required
@@ -28,7 +28,7 @@ def _pip(*pkgs):
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", *pkgs])
 
 print("[INSTALL] Installing packages …")
-_pip("romatch", "pyproj", "scikit-image", "tqdm", "Pillow", "opencv-python-headless")
+_pip("pyproj", "scikit-image", "tqdm", "Pillow", "opencv-python-headless")
 print("[INSTALL] Done.\n")
 
 # =============================================================================
@@ -59,9 +59,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 warnings.filterwarnings("ignore")
-
-# RoMa matching — auto-downloads weights on first call (from GitHub / HuggingFace)
-from romatch import roma_outdoor
 
 # =============================================================================
 # 2.  CONFIGURATION  (edit these for your Kaggle setup)
@@ -599,30 +596,54 @@ def run_retrieval(ref_map, uav_img_path, meta, ref_res,
 
 
 # =============================================================================
-# 9.  MATCHING  (RoMa via romatch)
+# 9.  MATCHING  (local feature matching with SIFT)
 # =============================================================================
 
-def roma_match_wrapper(uav_bgr: np.ndarray,
-                       ref_bgr: np.ndarray,
-                       roma_model,
-                       device: str = "cuda"):
+def sift_match_wrapper(uav_bgr: np.ndarray,
+                       ref_bgr: np.ndarray):
     """
-    Dense match two BGR images with RoMa (loaded from romatch pip package).
+    Dense-enough matching via SIFT + ratio test.
     Returns (sen_pts, ref_pts) as lists of [col, row] pixel coordinates.
     """
-    H_A, W_A = uav_bgr.shape[:2]
-    H_B, W_B = ref_bgr.shape[:2]
-    # romatch expects PIL images (RGB), but BGR vs RGB only affects colours,
-    # not keypoint positions — so fromarray on BGR is fine for localisation.
-    im_a = Image.fromarray(uav_bgr)
-    im_b = Image.fromarray(ref_bgr)
+    # Convert to grayscale for SIFT
+    gray1 = cv2.cvtColor(uav_bgr, cv2.COLOR_BGR2GRAY)
+    gray2 = cv2.cvtColor(ref_bgr, cv2.COLOR_BGR2GRAY)
 
-    warp, certainty = roma_model.match(im_a, im_b, device=device)
-    matches, certainty = roma_model.sample(warp, certainty, num=3000)
-    kp_a, kp_b = roma_model.to_pixel_coordinates(matches, H_A, W_A, H_B, W_B)
+    # SIFT detector/descriptor (falls back to ORB if SIFT missing)
+    if hasattr(cv2, "SIFT_create"):
+        sift = cv2.SIFT_create()
+    else:
+        sift = cv2.ORB_create()
 
-    sen_pts = kp_a.cpu().numpy().tolist()
-    ref_pts = kp_b.cpu().numpy().tolist()
+    kp1, des1 = sift.detectAndCompute(gray1, None)
+    kp2, des2 = sift.detectAndCompute(gray2, None)
+    if des1 is None or des2 is None or len(kp1) < 5 or len(kp2) < 5:
+        return [], []
+
+    # Brute‑force matcher + Lowe ratio test
+    if des1.dtype != np.float32:
+        des1 = des1.astype(np.float32)
+    if des2.dtype != np.float32:
+        des2 = des2.astype(np.float32)
+
+    bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
+    matches = bf.knnMatch(des1, des2, k=2)
+
+    good = []
+    for m, n in matches:
+        if m.distance < 0.75 * n.distance:
+            good.append(m)
+
+    if len(good) < 5:
+        return [], []
+
+    sen_pts = []
+    ref_pts = []
+    for m in good:
+        (x1, y1) = kp1[m.queryIdx].pt
+        (x2, y2) = kp2[m.trainIdx].pt
+        sen_pts.append([x1, y1])
+        ref_pts.append([x2, y2])
     return sen_pts, ref_pts
 
 
@@ -633,7 +654,7 @@ def roma_match_wrapper(uav_bgr: np.ndarray,
 def match_and_pnp(uav_bgr, finescale, K,
                   ref_map, dsm_map,
                   start_rows, start_cols, cut_H, cut_W,
-                  roma_model, matRot, device):
+                  matRot, device):
     """
     For each top-N retrieval candidate:
       1. Crop fineRef tile from rotated ref_map
@@ -679,7 +700,7 @@ def match_and_pnp(uav_bgr, finescale, K,
                              fy=RESIZE_RATIO / finescale)
 
         t0 = time.time()
-        sen_pts, ref_pts = roma_match_wrapper(uav_img, fineRef, roma_model, device)
+        sen_pts, ref_pts = sift_match_wrapper(uav_img, fineRef)
         t1 = time.time()
 
         if len(ref_pts) >= 5:
@@ -787,10 +808,6 @@ def main():
     print(f"[MODEL] Loading SPDGeo (device={DEVICE}) …")
     spdgeo_model, spdgeo_transform = load_spdgeo(SPDGEO_CKPT, device=DEVICE)
 
-    print(f"[MODEL] Loading RoMa from HuggingFace/GitHub …")
-    roma_model = roma_outdoor(device=DEVICE)   # auto-downloads weights
-    print()
-
     # ── Main loop ────────────────────────────────────────────────────────────
     results = []
     n_total = len(all_imgs)
@@ -834,7 +851,7 @@ def main():
             uav_bgr, finescale, K,
             ref_rotated, dsm_map,
             start_rows, start_cols, cut_H, cut_W,
-            roma_model, matRot, DEVICE,
+            matRot, DEVICE,
         )
 
         # ── Step 4: Select best prediction & compute error ─────────────────

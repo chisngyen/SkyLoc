@@ -10,7 +10,7 @@ One-file Kaggle runner:
 - Runs `Benchmark/Baseline.py` using retrieval method `SPDGeo` (patched in repo config)
 
 Important:
-  - Provide SPDGeo checkpoint via env var `SPDGEO_CKPT` (recommended) or edit below.
+  - Script auto-uses your default SPDGeo checkpoint path (below), or env var `SPDGEO_CKPT`.
   - RoMa weights are required for full baseline (matching+PnP).
 """
 
@@ -28,7 +28,11 @@ WORK = Path("/kaggle/working")
 REPO_DIR = WORK / "SkyLoc"
 BENCH_DIR = REPO_DIR / "Benchmark"
 
-DATA_ROOT = Path("/kaggle/input/datasets/hunhtrungkit/uav-avl/Data")
+DATASET_BASE = Path("/kaggle/input/datasets/hunhtrungkit/uav-avl")
+DEFAULT_SPDGEO_CKPT = (
+    "/kaggle/input/models/minh2duy/"
+    "exp35-spdgeo-dpea-m-unfreeze-blocks-4-6/pytorch/default/1/exp35_dpea_ga_best.pth"
+)
 
 # Optional weights download (public)
 ROMA_URL = "https://huggingface.co/datasets/Parskatt/storage/resolve/main/roma_outdoor.pth"
@@ -57,6 +61,25 @@ def section(title: str):
     print(" ", title)
     print("=" * 60)
 
+def resolve_data_root() -> Path:
+    """
+    Accept either:
+      - /kaggle/input/.../uav-avl/Data
+      - /kaggle/input/.../uav-avl
+    and always return the final Data dir.
+    """
+    data_dir = DATASET_BASE / "Data"
+    if data_dir.exists():
+        return data_dir
+    if DATASET_BASE.exists():
+        # In case user passes Data directly as base in future
+        if (DATASET_BASE / "Reference_map").exists() and (DATASET_BASE / "UAV_image").exists():
+            return DATASET_BASE
+    raise FileNotFoundError(
+        f"Dataset not found at {DATASET_BASE} (or {data_dir}). "
+        "Add dataset `hunhtrungkit/uav-avl` to this notebook."
+    )
+
 
 def main():
     section("Step 1/6 — Clone SkyLoc repo")
@@ -84,31 +107,37 @@ def main():
         )
 
     section("Step 3/6 — Link UAV-AVL dataset into Benchmark/Data")
-    assert DATA_ROOT.exists(), (
-        f"[ERROR] Dataset not found at {DATA_ROOT}\n"
-        "Add dataset `hunhtrungkit/uav-avl` to this notebook."
-    )
+    data_root = resolve_data_root()
     data_link = BENCH_DIR / "Data"
     if data_link.exists() or data_link.is_symlink():
         print(f"[SKIP] {data_link} exists")
     else:
-        data_link.symlink_to(DATA_ROOT)
-        print(f"[OK] Linked {data_link} -> {DATA_ROOT}")
+        data_link.symlink_to(data_root)
+        print(f"[OK] Linked {data_link} -> {data_root}")
 
     section("Step 4/6 — Ensure weights (RoMa + DINOv2)")
+    missing = []
     if not ROMA_DST.exists():
-        print("[DL] RoMa weights...")
-        wget(ROMA_URL, ROMA_DST)
-    else:
-        print("[SKIP] RoMa weights present")
+        missing.append(("RoMa", ROMA_DST, ROMA_URL))
     if not DINO_DST.exists():
-        print("[DL] DINOv2 ViT-L/14 weights...")
-        wget(DINO_URL, DINO_DST)
+        missing.append(("DINOv2", DINO_DST, DINO_URL))
+
+    if missing:
+        print("[ERROR] Required weights are missing and cannot be auto-downloaded on Kaggle.")
+        for name, path, url in missing:
+            print(f"  - {name} expected at: {path}")
+            print(f"    (original public URL: {url})")
+        print(
+            "\nPlease download these files locally and upload them as a Kaggle Dataset,\n"
+            "then mount that dataset so the weights appear at the expected paths above.\n"
+            "After that, rerun this script."
+        )
+        return
     else:
-        print("[SKIP] DINOv2 weights present")
+        print("[OK] Found RoMa + DINOv2 weights locally")
 
     section("Step 5/6 — SPDGeo checkpoint check")
-    spdgeo_ckpt = os.environ.get("SPDGEO_CKPT")
+    spdgeo_ckpt = os.environ.get("SPDGEO_CKPT", DEFAULT_SPDGEO_CKPT)
     if not spdgeo_ckpt:
         print(textwrap.dedent("""
         [WARN] SPDGEO_CKPT is not set.
@@ -117,7 +146,12 @@ def main():
           /kaggle/input/models/.../exp35_dpea_ga_best.pth
         """))
     else:
-        print(f"[OK] SPDGEO_CKPT={spdgeo_ckpt}")
+        os.environ["SPDGEO_CKPT"] = spdgeo_ckpt
+        if Path(spdgeo_ckpt).exists():
+            print(f"[OK] SPDGEO_CKPT={spdgeo_ckpt}")
+        else:
+            print(f"[WARN] SPDGEO_CKPT path not found: {spdgeo_ckpt}")
+            print("[WARN] Baseline still runs, but SPDGeo will use default init if checkpoint is missing.")
 
     section("Step 6/6 — Run Benchmark/Baseline.py")
     # Run from Benchmark folder to match relative imports
