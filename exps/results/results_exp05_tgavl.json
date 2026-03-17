@@ -1,0 +1,514 @@
+{
+  "experiment": "exp05_tgavl",
+  "description": "TG-AVL: Temporal-Geometric AVL with DINOv2+GeM+TemporalTransformer",
+  "backbone": "dinov2_vitb14",
+  "embed_dim": 512,
+  "img_size": 518,
+  "traj_K": 3,
+  "temp_layers": 2,
+  "temp_heads": 8,
+  "phase1_epochs": 20,
+  "phase2_epochs": 30,
+  "best_single_R@1": 0.6756756756756757,
+  "best_traj_R@1": 0.6164736164736164,
+  "final_metrics": {
+    "R@1": 0.6756756756756757,
+    "R@5": 0.8970398970398971,
+    "R@10": 0.9528099528099528,
+    "R@1%": 0.9965679965679966,
+    "AP": 0.5821783059648912,
+    "gps_matched_locs": 0,
+    "traj_R@1": 0.6164736164736164,
+    "traj_R@5": 0.9099099099099099,
+    "traj_R@10": 0.9703989703989704,
+    "infer_query_total_s": 19.68,
+    "infer_gallery_total_s": 136.08,
+    "infer_per_query_ms": 8.44,
+    "infer_per_gallery_ms": 7.48,
+    "infer_traj_total_s": 20.62,
+    "n_queries": 2331,
+    "n_gallery": 18198,
+    "n_traj_queries": 777
+  },
+  "history": [
+    {
+      "phase": 1,
+      "epoch": 1,
+      "loss": 1.61647,
+      "time_s": 59.1
+    },
+    {
+      "phase": 1,
+      "epoch": 2,
+      "loss": 0.98353,
+      "time_s": 53.8
+    },
+    {
+      "phase": 1,
+      "epoch": 3,
+      "loss": 0.86364,
+      "time_s": 51.5
+    },
+    {
+      "phase": 1,
+      "epoch": 4,
+      "loss": 0.82935,
+      "time_s": 49.4
+    },
+    {
+      "phase": 1,
+      "epoch": 5,
+      "loss": 0.80058,
+      "time_s": 48.1,
+      "R@1": 0.4796224796224796,
+      "R@5": 0.7571857571857572,
+      "R@10": 0.8472758472758473,
+      "R@1%": 0.9897039897039897,
+      "AP": 0.39851824648005135,
+      "gps_matched_locs": 0,
+      "traj_R@1": 0.001287001287001287,
+      "traj_R@5": 0.002574002574002574,
+      "traj_R@10": 0.003861003861003861,
+      "infer_query_total_s": 31.37,
+      "infer_gallery_total_s": 137.49,
+      "infer_per_query_ms": 13.46,
+      "infer_per_gallery_ms": 7.56,
+      "infer_traj_total_s": 21.95,
+      "n_queries": 2331,
+      "n_gallery": 18198,
+      "n_traj_queries": 777,
+      "best_p1": true
+    },
+    {
+      "phase": 1,
+      "epoch": 6,
+      "loss": 0.78307,
+      "time_s": 51.0
+    },
+    {
+      "phase": 1,
+      "epoch": 7,
+      "loss": 0.7718,
+      "time_s": 48.5
+    },
+    {
+      "phase": 1,
+      "epoch": 8,
+      "loss": 0.75829,
+      "time_s": 47.2
+    },
+    {
+      "phase": 1,
+      "epoch": 9,
+      "loss": 0.74674,
+      "time_s": 47.6
+    },
+    {
+      "phase": 1,
+      "epoch": 10,
+      "loss": 0.74084,
+      "time_s": 45.7,
+      "R@1": 0.5752895752895753,
+      "R@5": 0.8301158301158301,
+      "R@10": 0.9107679107679107,
+      "R@1%": 0.9961389961389961,
+      "AP": 0.48388921811516095,
+      "gps_matched_locs": 0,
+      "traj_R@1": 0.0,
+      "traj_R@5": 0.002574002574002574,
+      "traj_R@10": 0.003861003861003861,
+      "infer_query_total_s": 21.5,
+      "infer_gallery_total_s": 136.49,
+      "infer_per_query_ms": 9.22,
+      "infer_per_gallery_ms": 7.5,
+      "infer_traj_total_s": 22.37,
+      "n_queries": 2331,
+      "n_gallery": 18198,
+      "n_traj_queries": 777,
+      "best_p1": true
+    },
+    {
+      "phase": 1,
+      "epoch": 11,
+      "loss": 0.73793,
+      "time_s": 45.1
+    },
+    {
+      "phase": 1,
+      "epoch": 12,
+      "loss": 0.72852,
+      "time_s": 44.4
+    },
+    {
+      "phase": 1,
+      "epoch": 13,
+      "loss": 0.72229,
+      "time_s": 44.1
+    },
+    {
+      "phase": 1,
+      "epoch": 14,
+      "loss": 0.72183,
+      "time_s": 43.3
+    },
+    {
+      "phase": 1,
+      "epoch": 15,
+      "loss": 0.71195,
+      "time_s": 43.7,
+      "R@1": 0.6130416130416131,
+      "R@5": 0.87001287001287,
+      "R@10": 0.9347919347919348,
+      "R@1%": 0.993993993993994,
+      "AP": 0.5358551893087063,
+      "gps_matched_locs": 0,
+      "traj_R@1": 0.0,
+      "traj_R@5": 0.0,
+      "traj_R@10": 0.0,
+      "infer_query_total_s": 20.69,
+      "infer_gallery_total_s": 136.57,
+      "infer_per_query_ms": 8.88,
+      "infer_per_gallery_ms": 7.5,
+      "infer_traj_total_s": 21.79,
+      "n_queries": 2331,
+      "n_gallery": 18198,
+      "n_traj_queries": 777,
+      "best_p1": true
+    },
+    {
+      "phase": 1,
+      "epoch": 16,
+      "loss": 0.71099,
+      "time_s": 43.9
+    },
+    {
+      "phase": 1,
+      "epoch": 17,
+      "loss": 0.70863,
+      "time_s": 43.6
+    },
+    {
+      "phase": 1,
+      "epoch": 18,
+      "loss": 0.70468,
+      "time_s": 43.8
+    },
+    {
+      "phase": 1,
+      "epoch": 19,
+      "loss": 0.70458,
+      "time_s": 42.2
+    },
+    {
+      "phase": 1,
+      "epoch": 20,
+      "loss": 0.70403,
+      "time_s": 42.2,
+      "R@1": 0.6756756756756757,
+      "R@5": 0.8970398970398971,
+      "R@10": 0.9528099528099528,
+      "R@1%": 0.9965679965679966,
+      "AP": 0.5821783059648912,
+      "gps_matched_locs": 0,
+      "traj_R@1": 0.0,
+      "traj_R@5": 0.0,
+      "traj_R@10": 0.0,
+      "infer_query_total_s": 20.24,
+      "infer_gallery_total_s": 135.57,
+      "infer_per_query_ms": 8.68,
+      "infer_per_gallery_ms": 7.45,
+      "infer_traj_total_s": 22.4,
+      "n_queries": 2331,
+      "n_gallery": 18198,
+      "n_traj_queries": 777,
+      "best_p1": true
+    },
+    {
+      "phase": 2,
+      "epoch": 21,
+      "loss": 0.87469,
+      "time_s": 102.4
+    },
+    {
+      "phase": 2,
+      "epoch": 22,
+      "loss": 0.6146,
+      "time_s": 102.8
+    },
+    {
+      "phase": 2,
+      "epoch": 23,
+      "loss": 0.61372,
+      "time_s": 99.9
+    },
+    {
+      "phase": 2,
+      "epoch": 24,
+      "loss": 0.6095,
+      "time_s": 101.4
+    },
+    {
+      "phase": 2,
+      "epoch": 25,
+      "loss": 0.61315,
+      "time_s": 100.5,
+      "R@1": 0.6756756756756757,
+      "R@5": 0.8970398970398971,
+      "R@10": 0.9528099528099528,
+      "R@1%": 0.9965679965679966,
+      "AP": 0.5821783059648912,
+      "gps_matched_locs": 0,
+      "traj_R@1": 0.5765765765765766,
+      "traj_R@5": 0.8777348777348777,
+      "traj_R@10": 0.9292149292149292,
+      "infer_query_total_s": 21.04,
+      "infer_gallery_total_s": 136.15,
+      "infer_per_query_ms": 9.02,
+      "infer_per_gallery_ms": 7.48,
+      "infer_traj_total_s": 22.6,
+      "n_queries": 2331,
+      "n_gallery": 18198,
+      "n_traj_queries": 777,
+      "best": true
+    },
+    {
+      "phase": 2,
+      "epoch": 26,
+      "loss": 0.61163,
+      "time_s": 100.8
+    },
+    {
+      "phase": 2,
+      "epoch": 27,
+      "loss": 0.60811,
+      "time_s": 99.1
+    },
+    {
+      "phase": 2,
+      "epoch": 28,
+      "loss": 0.6095,
+      "time_s": 100.1
+    },
+    {
+      "phase": 2,
+      "epoch": 29,
+      "loss": 0.60881,
+      "time_s": 99.1
+    },
+    {
+      "phase": 2,
+      "epoch": 30,
+      "loss": 0.60804,
+      "time_s": 98.6,
+      "R@1": 0.6756756756756757,
+      "R@5": 0.8970398970398971,
+      "R@10": 0.9528099528099528,
+      "R@1%": 0.9965679965679966,
+      "AP": 0.5821783059648912,
+      "gps_matched_locs": 0,
+      "traj_R@1": 0.5907335907335908,
+      "traj_R@5": 0.8983268983268984,
+      "traj_R@10": 0.9382239382239382,
+      "infer_query_total_s": 21.11,
+      "infer_gallery_total_s": 135.85,
+      "infer_per_query_ms": 9.06,
+      "infer_per_gallery_ms": 7.46,
+      "infer_traj_total_s": 22.2,
+      "n_queries": 2331,
+      "n_gallery": 18198,
+      "n_traj_queries": 777,
+      "best": true
+    },
+    {
+      "phase": 2,
+      "epoch": 31,
+      "loss": 0.61,
+      "time_s": 100.9
+    },
+    {
+      "phase": 2,
+      "epoch": 32,
+      "loss": 0.60872,
+      "time_s": 99.6
+    },
+    {
+      "phase": 2,
+      "epoch": 33,
+      "loss": 0.60598,
+      "time_s": 99.7
+    },
+    {
+      "phase": 2,
+      "epoch": 34,
+      "loss": 0.60399,
+      "time_s": 99.5
+    },
+    {
+      "phase": 2,
+      "epoch": 35,
+      "loss": 0.605,
+      "time_s": 99.8,
+      "R@1": 0.6756756756756757,
+      "R@5": 0.8970398970398971,
+      "R@10": 0.9528099528099528,
+      "R@1%": 0.9965679965679966,
+      "AP": 0.5821783059648912,
+      "gps_matched_locs": 0,
+      "traj_R@1": 0.5997425997425997,
+      "traj_R@5": 0.8983268983268984,
+      "traj_R@10": 0.9523809523809523,
+      "infer_query_total_s": 21.16,
+      "infer_gallery_total_s": 136.34,
+      "infer_per_query_ms": 9.08,
+      "infer_per_gallery_ms": 7.49,
+      "infer_traj_total_s": 21.86,
+      "n_queries": 2331,
+      "n_gallery": 18198,
+      "n_traj_queries": 777,
+      "best": true
+    },
+    {
+      "phase": 2,
+      "epoch": 36,
+      "loss": 0.60586,
+      "time_s": 102.6
+    },
+    {
+      "phase": 2,
+      "epoch": 37,
+      "loss": 0.60217,
+      "time_s": 102.2
+    },
+    {
+      "phase": 2,
+      "epoch": 38,
+      "loss": 0.60636,
+      "time_s": 102.1
+    },
+    {
+      "phase": 2,
+      "epoch": 39,
+      "loss": 0.60355,
+      "time_s": 101.2
+    },
+    {
+      "phase": 2,
+      "epoch": 40,
+      "loss": 0.59879,
+      "time_s": 102.4,
+      "R@1": 0.6756756756756757,
+      "R@5": 0.8970398970398971,
+      "R@10": 0.9528099528099528,
+      "R@1%": 0.9965679965679966,
+      "AP": 0.5821783059648912,
+      "gps_matched_locs": 0,
+      "traj_R@1": 0.5842985842985843,
+      "traj_R@5": 0.9009009009009009,
+      "traj_R@10": 0.9485199485199485,
+      "infer_query_total_s": 21.43,
+      "infer_gallery_total_s": 135.66,
+      "infer_per_query_ms": 9.19,
+      "infer_per_gallery_ms": 7.45,
+      "infer_traj_total_s": 21.82,
+      "n_queries": 2331,
+      "n_gallery": 18198,
+      "n_traj_queries": 777
+    },
+    {
+      "phase": 2,
+      "epoch": 41,
+      "loss": 0.59984,
+      "time_s": 99.5
+    },
+    {
+      "phase": 2,
+      "epoch": 42,
+      "loss": 0.59999,
+      "time_s": 100.1
+    },
+    {
+      "phase": 2,
+      "epoch": 43,
+      "loss": 0.5985,
+      "time_s": 96.6
+    },
+    {
+      "phase": 2,
+      "epoch": 44,
+      "loss": 0.59848,
+      "time_s": 98.2
+    },
+    {
+      "phase": 2,
+      "epoch": 45,
+      "loss": 0.59802,
+      "time_s": 97.2,
+      "R@1": 0.6756756756756757,
+      "R@5": 0.8970398970398971,
+      "R@10": 0.9528099528099528,
+      "R@1%": 0.9965679965679966,
+      "AP": 0.5821783059648912,
+      "gps_matched_locs": 0,
+      "traj_R@1": 0.6126126126126126,
+      "traj_R@5": 0.9099099099099099,
+      "traj_R@10": 0.9626769626769627,
+      "infer_query_total_s": 21.01,
+      "infer_gallery_total_s": 135.52,
+      "infer_per_query_ms": 9.01,
+      "infer_per_gallery_ms": 7.45,
+      "infer_traj_total_s": 22.14,
+      "n_queries": 2331,
+      "n_gallery": 18198,
+      "n_traj_queries": 777,
+      "best": true
+    },
+    {
+      "phase": 2,
+      "epoch": 46,
+      "loss": 0.59935,
+      "time_s": 98.0
+    },
+    {
+      "phase": 2,
+      "epoch": 47,
+      "loss": 0.59924,
+      "time_s": 96.5
+    },
+    {
+      "phase": 2,
+      "epoch": 48,
+      "loss": 0.59698,
+      "time_s": 95.8
+    },
+    {
+      "phase": 2,
+      "epoch": 49,
+      "loss": 0.59377,
+      "time_s": 95.7
+    },
+    {
+      "phase": 2,
+      "epoch": 50,
+      "loss": 0.59909,
+      "time_s": 95.1,
+      "R@1": 0.6756756756756757,
+      "R@5": 0.8970398970398971,
+      "R@10": 0.9528099528099528,
+      "R@1%": 0.9965679965679966,
+      "AP": 0.5821783059648912,
+      "gps_matched_locs": 0,
+      "traj_R@1": 0.6164736164736164,
+      "traj_R@5": 0.9099099099099099,
+      "traj_R@10": 0.9703989703989704,
+      "infer_query_total_s": 20.91,
+      "infer_gallery_total_s": 135.5,
+      "infer_per_query_ms": 8.97,
+      "infer_per_gallery_ms": 7.45,
+      "infer_traj_total_s": 21.09,
+      "n_queries": 2331,
+      "n_gallery": 18198,
+      "n_traj_queries": 777,
+      "best": true
+    }
+  ]
+}
